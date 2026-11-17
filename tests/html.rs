@@ -783,6 +783,16 @@ fn nested_tables_under_the_depth_limit_convert() {
 }
 
 #[test]
+fn template_cells_inside_nested_tables_imply_no_wrappers() {
+    // Inside a <template> html5ever inserts cells and rows directly, with no
+    // implied tbody/tr, so each level here is table > tbody > tr > td >
+    // template > td (6 deep): 40 levels convert. Pushing wrappers inside the
+    // template too would count 8 per level and falsely reject them.
+    let html = format!("<!doctype html><body>{}x", "<table><td><template><td>".repeat(40));
+    assert!(to_markdown_bytes(html.as_bytes(), Some(Format::Html)).is_ok());
+}
+
+#[test]
 fn stray_table_cells_outside_a_table_do_not_flatten_nesting() {
     // html5ever ignores td tokens in body context (no open table), so the
     // divs opened between them really keep nesting; the preflight must not
