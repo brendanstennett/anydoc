@@ -450,11 +450,15 @@ fn foreign_content_title_does_not_swallow_nested_markup() {
 #[test]
 fn html_title_still_swallows_markup_as_raw_text() {
     // The HTML (non-foreign) <title> keeps RCDATA semantics: nested markup is
-    // text, not elements, and the document converts normally.
-    let html = br#"<!doctype html><html><head><title><div>not markup</div></title></head><body><p>ok</p></body></html>"#;
-    let markdown = to_markdown_bytes(html, Some(Format::Html)).unwrap();
+    // text, so the preflight must not count it and the document converts.
+    // Counted as elements, the divs would be rejected at max_xml_depth.
+    let mut html = String::from("<!doctype html><html><head><title>");
+    for _ in 0..300 {
+        html.push_str("<div>");
+    }
+    html.push_str("</title></head><body><p>ok</p></body></html>");
+    let markdown = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap();
     assert!(markdown.contains("ok"), "got: {markdown:?}");
-    assert!(!markdown.contains("not markup"), "got: {markdown:?}");
 }
 
 #[test]
@@ -757,6 +761,25 @@ fn li_start_does_not_close_items_below_special_elements() {
     }
     let error = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap_err();
     assert_preflight_depth_limit(error);
+}
+
+#[test]
+fn nested_tables_count_row_groups_and_rows_in_the_preflight() {
+    // Each nested table really nests table > tbody > tr > td, whether the
+    // markup names the row group and row or html5ever implies them, so 70
+    // levels (about 280 deep) must be rejected before DOM construction.
+    for level in ["<table><tbody><tr><td>", "<table><tr><td>", "<table><td>"] {
+        let html = format!("<!doctype html><body>{}x", level.repeat(70));
+        let error = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap_err();
+        assert_preflight_depth_limit(error);
+    }
+}
+
+#[test]
+fn nested_tables_under_the_depth_limit_convert() {
+    let html = format!("<!doctype html><body>{}x", "<table><td>".repeat(60));
+    let markdown = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap();
+    assert!(markdown.contains('x'), "got: {markdown:?}");
 }
 
 #[test]

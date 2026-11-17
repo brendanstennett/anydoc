@@ -640,22 +640,48 @@ fn close_implied_before_start(open: &mut Vec<LocalName>, name: &str) -> bool {
             return true;
         }
         // Inside a table, every table-family start first clears the stack
-        // back to the table context (html5ever InTable:
-        // pop_until_current(table_scope) for caption, col, colgroup,
-        // tbody/tfoot/thead, and td/th/tr alike): foster-parented stray
-        // content above the table leaves the stack and previous rows or
-        // cells close. Without the clear, that stray content accumulates
-        // as phantom depth and valid repaired table markup can be falsely
-        // rejected at max_xml_depth. The phantom tbody/tr wrappers
-        // html5ever inserts afterwards are not modeled (a bounded,
-        // documented deviation), and a template above the table stops the
-        // clear exactly as table_scope does.
-        if let Some(clear_to) = open
+        // back to the context of its insertion mode: the table for caption,
+        // col, colgroup and tbody/tfoot/thead (InTable), the open row group
+        // for tr (InTableBody), and the open row for td/th (InRow).
+        // Foster-parented stray content above the table and previous rows
+        // or cells leave the stack. Without the clear, that stray content
+        // accumulates as phantom depth and valid repaired table markup can
+        // be falsely rejected at max_xml_depth. Clearing further than the
+        // parser does (to the table for every start) drops the row group and
+        // row html5ever keeps open, undercounting each nested table by two
+        // levels. When the row group or row is missing, html5ever inserts an
+        // implied tbody and/or tr, which really nest, so they are pushed
+        // too; template contents take cells and rows directly. A template
+        // above the table stops the clear exactly as table_scope does.
+        if let Some(context) = open
             .iter()
             .rposition(|candidate| matches!(candidate.as_ref(), "table" | "template" | "html"))
-            .map(|index| index + 1)
         {
+            let implies_wrappers = open[context].as_ref() == "table";
+            let innermost = |names: &[&str]| {
+                open[context + 1..]
+                    .iter()
+                    .rposition(|candidate| names.contains(&candidate.as_ref()))
+                    .map(|index| context + 1 + index)
+            };
+            let row_group = innermost(&["tbody", "thead", "tfoot"]);
+            let row = innermost(&["tr"]);
+            let (clear_to, implied): (usize, &[&str]) = match name {
+                "td" | "th" => match (row, row_group) {
+                    (Some(row), _) => (row + 1, &[]),
+                    (None, Some(row_group)) => (row_group + 1, &["tr"]),
+                    (None, None) => (context + 1, &["tbody", "tr"]),
+                },
+                "tr" => match row_group {
+                    Some(row_group) => (row_group + 1, &[]),
+                    None => (context + 1, &["tbody"]),
+                },
+                _ => (context + 1, &[]),
+            };
             open.truncate(clear_to);
+            if implies_wrappers {
+                open.extend(implied.iter().map(|&wrapper| LocalName::from(wrapper)));
+            }
         }
         return false;
     }
