@@ -5,8 +5,10 @@ use crate::error::ConvertError;
 use crate::model::{AnchorId, Document, ImageSource, LinkTarget};
 use crate::package::limits;
 use crate::package::xml::{Attr, Element, Node};
+use crate::shared::assets::AssetSink;
 use crate::shared::html::{HtmlCtx, Stylesheet};
 use crate::shared::uri::is_absolute_uri;
+use data_url::DataUrl;
 use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use html5ever::LocalName;
 use html5ever::tendril::StrTendril;
@@ -58,9 +60,10 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
 
     let mut node_count = 0usize;
     let body = adapt_element(body, 1, &mut node_count)?;
-    let blocks = crate::shared::html::to_blocks(&body, &css, &StandaloneCtx)?;
+    let ctx = StandaloneCtx::default();
+    let blocks = crate::shared::html::to_blocks(&body, &css, &ctx)?;
 
-    Ok(Document { blocks, ..Document::default() })
+    Ok(Document { blocks, assets: ctx.assets.into_inner().assets, ..Document::default() })
 }
 
 fn decode_html(bytes: &[u8]) -> String {
@@ -983,12 +986,17 @@ fn bump_node_count(node_count: &mut usize) -> Result<(), ConvertError> {
     Ok(())
 }
 
-struct StandaloneCtx;
+#[derive(Default)]
+struct StandaloneCtx {
+    assets: RefCell<AssetSink>,
+}
 
 impl HtmlCtx for StandaloneCtx {
     fn link_target(&self, href: &str) -> Option<LinkTarget> {
         let href = href.trim();
-        if href.is_empty() {
+        // A data: URI embeds its payload rather than pointing anywhere, so
+        // the link keeps only its text.
+        if href.is_empty() || href.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("data:")) {
             return None;
         }
         if let Some(fragment) = href.strip_prefix('#') {
@@ -1012,6 +1020,20 @@ impl HtmlCtx for StandaloneCtx {
         let src = src.trim();
         if src.is_empty() {
             return Ok(None);
+        }
+        // A data: URI embeds the image itself, so it is retained as an asset
+        // like other formats' embedded images (and renders as its alt text).
+        // One that does not decode has only its alt text to offer.
+        if let Ok(url) = DataUrl::process(src) {
+            let mime = url.mime_type();
+            let media_type = format!("{}/{}", mime.type_, mime.subtype);
+            let Ok((bytes, _)) = url.decode_to_vec() else {
+                return Ok(Some(ImageSource::Unavailable));
+            };
+            let mut assets = self.assets.borrow_mut();
+            let origin_part = format!("data-uri/{}", assets.assets.len());
+            let id = assets.add(media_type, origin_part, &bytes)?;
+            return Ok(Some(ImageSource::Asset(id)));
         }
         Ok(Some(ImageSource::External(src.to_owned())))
     }

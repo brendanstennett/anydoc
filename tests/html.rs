@@ -331,6 +331,50 @@ fn frameset_html_converts_without_body_error() {
     assert_eq!(to_markdown_bytes(html, Some(Format::Html)).unwrap(), "");
 }
 
+// tests/fixture-src/dot.png, base64-encoded (gen_fixtures.py's DOT_PNG).
+const DOT_PNG_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+#[test]
+fn data_uri_image_is_retained_as_an_asset() {
+    let html = format!(
+        r#"<!doctype html><p>Before <img alt="tiny dot" src="{DOT_PNG_DATA_URI}"> after</p>"#
+    );
+    let markdown = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap();
+    assert_eq!(markdown, "Before tiny dot after\n");
+
+    let document = to_document(html.as_bytes(), Some(Format::Html)).unwrap();
+    match &document.blocks[0] {
+        Block::Paragraph(inlines) => assert!(
+            inlines.iter().any(|inline| matches!(
+                inline,
+                Inline::Image { source: ImageSource::Asset(id), .. } if id.0 == 0
+            )),
+            "got: {inlines:?}"
+        ),
+        other => panic!("expected paragraph, got {other:?}"),
+    }
+    let [asset] = &document.assets[..] else {
+        panic!("expected one asset, got {}", document.assets.len());
+    };
+    assert_eq!(asset.media_type, "image/png");
+    assert_eq!(asset.bytes, include_bytes!("fixture-src/dot.png"));
+}
+
+#[test]
+fn undecodable_data_uri_image_keeps_only_its_alt_text() {
+    let html = br#"<!doctype html><p>Before <img alt="tiny dot" src="data:image/png;base64,not*base64"> after</p>"#;
+    let markdown = to_markdown_bytes(html, Some(Format::Html)).unwrap();
+    assert_eq!(markdown, "Before tiny dot after\n");
+    assert!(to_document(html, Some(Format::Html)).unwrap().assets.is_empty());
+}
+
+#[test]
+fn data_uri_link_keeps_only_its_text() {
+    let html = br#"<!doctype html><p><a href="data:text/plain,hello%20world">download</a></p>"#;
+    let markdown = to_markdown_bytes(html, Some(Format::Html)).unwrap();
+    assert_eq!(markdown, "download\n");
+}
+
 #[test]
 fn relative_image_is_preserved_without_fetching() {
     let html = br#"<!doctype html><p><img src="images/pixel.png"></p>"#;
