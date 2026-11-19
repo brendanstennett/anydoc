@@ -362,17 +362,37 @@ fn data_uri_image_is_retained_as_an_asset() {
 
 #[test]
 fn undecodable_data_uri_image_keeps_only_its_alt_text() {
-    let html = br#"<!doctype html><p>Before <img alt="tiny dot" src="data:image/png;base64,not*base64"> after</p>"#;
-    let markdown = to_markdown_bytes(html, Some(Format::Html)).unwrap();
-    assert_eq!(markdown, "Before tiny dot after\n");
-    assert!(to_document(html, Some(Format::Html)).unwrap().assets.is_empty());
+    // Bad base64, and a data: URI with no comma, which doesn't parse at all.
+    for src in ["data:image/png;base64,not*base64", "data:image/png;base64"] {
+        let html =
+            format!(r#"<!doctype html><p>Before <img alt="tiny dot" src="{src}"> after</p>"#);
+        let markdown = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap();
+        assert_eq!(markdown, "Before tiny dot after\n", "src: {src}");
+        assert!(to_document(html.as_bytes(), Some(Format::Html)).unwrap().assets.is_empty());
+    }
 }
 
 #[test]
 fn data_uri_link_keeps_only_its_text() {
-    let html = br#"<!doctype html><p><a href="data:text/plain,hello%20world">download</a></p>"#;
-    let markdown = to_markdown_bytes(html, Some(Format::Html)).unwrap();
-    assert_eq!(markdown, "download\n");
+    // Browsers ignore a newline inside the scheme, and one with no comma is
+    // still a data: URI.
+    for href in
+        ["data:text/plain,hello%20world", "da&#10;ta:text/plain,hello%20world", "data:text/plain"]
+    {
+        let html = format!(r#"<!doctype html><p><a href="{href}">download</a></p>"#);
+        let markdown = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap();
+        assert_eq!(markdown, "download\n", "href: {href}");
+    }
+}
+
+#[test]
+fn data_uri_image_with_a_newline_in_its_scheme_is_an_asset() {
+    // Browsers ignore tabs and newlines in a URL, so this is still a data: URI.
+    let src = DOT_PNG_DATA_URI.replacen("data:", "da&#10;ta:", 1);
+    let html = format!(r#"<!doctype html><p>Before <img alt="tiny dot" src="{src}"> after</p>"#);
+    let markdown = to_markdown_bytes(html.as_bytes(), Some(Format::Html)).unwrap();
+    assert_eq!(markdown, "Before tiny dot after\n");
+    assert_eq!(to_document(html.as_bytes(), Some(Format::Html)).unwrap().assets.len(), 1);
 }
 
 #[test]
