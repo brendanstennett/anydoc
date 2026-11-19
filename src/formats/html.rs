@@ -2,7 +2,7 @@
 //! semantic HTML -> document-model frontend used by EPUB.
 
 use crate::error::ConvertError;
-use crate::model::{AnchorId, Document, ImageSource, LinkTarget};
+use crate::model::{AnchorId, AssetId, Document, ImageSource, LinkTarget};
 use crate::package::limits;
 use crate::package::xml::{Attr, Element, Node};
 use crate::shared::assets::AssetSink;
@@ -18,6 +18,7 @@ use html5ever::tokenizer::{
 };
 use scraper::{ElementRef, Html, Node as HtmlNode};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Parse a standalone HTML document into anydoc's document model.
@@ -989,6 +990,10 @@ fn bump_node_count(node_count: &mut usize) -> Result<(), ConvertError> {
 #[derive(Default)]
 struct StandaloneCtx {
     assets: RefCell<AssetSink>,
+    /// The asset each data: image source became, so repeats of one source
+    /// (lazy-load placeholders, say) share it, as repeated references to one
+    /// package part do in other formats.
+    data_uri_assets: RefCell<HashMap<String, AssetId>>,
 }
 
 impl HtmlCtx for StandaloneCtx {
@@ -1030,6 +1035,9 @@ impl HtmlCtx for StandaloneCtx {
             Err(DataUrlError::NotADataUrl) => {}
             Err(DataUrlError::NoComma) => return Ok(Some(ImageSource::Unavailable)),
             Ok(url) => {
+                if let Some(&id) = self.data_uri_assets.borrow().get(src) {
+                    return Ok(Some(ImageSource::Asset(id)));
+                }
                 let mime = url.mime_type();
                 let media_type = format!("{}/{}", mime.type_, mime.subtype);
                 let Ok((bytes, _)) = url.decode_to_vec() else {
@@ -1038,6 +1046,7 @@ impl HtmlCtx for StandaloneCtx {
                 let mut assets = self.assets.borrow_mut();
                 let origin_part = format!("data-uri/{}", assets.assets.len());
                 let id = assets.add(media_type, origin_part, &bytes)?;
+                self.data_uri_assets.borrow_mut().insert(src.to_owned(), id);
                 return Ok(Some(ImageSource::Asset(id)));
             }
         }

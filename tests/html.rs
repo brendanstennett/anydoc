@@ -361,6 +361,28 @@ fn data_uri_image_is_retained_as_an_asset() {
 }
 
 #[test]
+fn repeated_data_uri_image_shares_one_asset() {
+    let html = format!(
+        r#"<!doctype html><p><img alt="tiny dot" src="{DOT_PNG_DATA_URI}"> and <img alt="tiny dot" src="{DOT_PNG_DATA_URI}"></p>"#
+    );
+    let document = to_document(html.as_bytes(), Some(Format::Html)).unwrap();
+    assert_eq!(document.assets.len(), 1);
+    match &document.blocks[0] {
+        Block::Paragraph(inlines) => {
+            let assets: Vec<_> = inlines
+                .iter()
+                .filter_map(|inline| match inline {
+                    Inline::Image { source: ImageSource::Asset(id), .. } => Some(id.0),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(assets, [0, 0]);
+        }
+        other => panic!("expected paragraph, got {other:?}"),
+    }
+}
+
+#[test]
 fn undecodable_data_uri_image_keeps_only_its_alt_text() {
     // Bad base64, and a data: URI with no comma, which doesn't parse at all.
     for src in ["data:image/png;base64,not*base64", "data:image/png;base64"] {
